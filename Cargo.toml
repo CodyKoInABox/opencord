@@ -16,7 +16,7 @@ clap = { version = "4.5", features = ["derive"] }
 cpal = "0.18"
 directories = "6.0"
 ed25519-dalek = "3.0"
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu"] }
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "links", "wgpu"] }
 getrandom = "0.3"
 hmac = "0.12"
 if-addrs = "0.15"
@@ -34,6 +34,7 @@ ringbuf = "0.5"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2.0"

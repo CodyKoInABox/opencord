@@ -1,9 +1,8 @@
 # Opencord
 
-Opencord is a Windows-first, native peer-to-peer group chat prototype. It has
-no account service, message server, cloud database, telemetry collector,
-rendezvous server, relay, or blockchain. Messages are stored in SQLite on each
-member's computer and repaired from other online replicas when peers reconnect.
+Opencord is a Windows-first native peer-to-peer community app. Messages are
+stored locally in SQLite and missing history is synchronized directly from
+other group members when they reconnect.
 
 > [!WARNING]
 > This is an unaudited prototype, not production cryptographic software. Read
@@ -12,6 +11,10 @@ member's computer and repaired from other online replicas when peers reconnect.
 ## What works
 
 - Native Rust desktop UI with no browser runtime
+- Four persistent themes, accent colors, compact/cozy layouts, UI scaling, and
+  editable peer profiles
+- Channel search, quick switching, per-channel drafts, reply/copy actions, and
+  responsive member panels
 - Encrypted groups, text channels, messages, and attachments (up to 8 MiB)
 - Signed invite capabilities (`opencord://join/...`)
 - Automatic LAN discovery with mDNS
@@ -32,11 +35,9 @@ SQLite provides durable local indexing; Quinn carries direct QUIC sessions;
 CPAL and Opus provide compact audio. App-layer content uses
 XChaCha20-Poly1305, while persistent identities and events use Ed25519.
 
-WebRTC is not embedded in this prototype: Opus over QUIC is substantially
-smaller and the no-central rule rules out hosted STUN/TURN anyway. A future ICE
-adapter can improve NAT traversal without changing the event or identity model.
-Blockchain is also unnecessary: private group replication needs signed logs and
-eventual reconciliation, not global consensus.
+WebRTC is not embedded in this prototype: Opus over QUIC keeps the binary and
+runtime smaller. A future ICE adapter can improve NAT traversal without
+changing the event or identity model.
 
 See [architecture](docs/ARCHITECTURE.md) and [wire protocol](docs/PROTOCOL.md)
 for the design details.
@@ -85,14 +86,21 @@ connection alone does not reveal groups; both peers must possess the invite.
 
 Run `opencord.exe --help` for every command-line option.
 
-## Honest no-server tradeoff
+### Keyboard shortcuts
+
+- `Ctrl+K`: quick channel switcher
+- `Ctrl+F`: search the current channel
+- `Ctrl+,`: settings
+- `Alt+Up` / `Alt+Down`: previous or next channel
+- `Escape`: close search or the active dialog
+
+## Connectivity model
 
 Peers behind incompatible carrier-grade NAT cannot always establish a new
 connection without a reachable peer, manual port forwarding, or a relay. Since
-Opencord deliberately provides no central rendezvous, STUN, TURN, or relay, it
-reports that limitation instead of silently sending metadata or content through
-infrastructure. Offline delivery likewise exists only while another replica
-holding the message eventually comes online.
+Opencord connects peers directly, it does not currently include hosted
+rendezvous, STUN, TURN, or relay infrastructure. Offline delivery is completed
+when another replica holding the message comes online.
 
 ## Development checks
 
@@ -115,4 +123,5 @@ resident cost; DX12 and direct OpenGL were both worse on this machine. These are
 machine-specific prototype measurements and a baseline for further UI-renderer
 work, not universal guarantees.
 
-Licensed under AGPL-3.0-or-later.
+Created by [CodyKoInABox](https://github.com/CodyKoInABox) and licensed under
+[AGPL-3.0-or-later](LICENSE).

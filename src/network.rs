@@ -706,7 +706,7 @@ fn make_hello(identity: &Identity, listen_port: u16) -> anyhow::Result<PeerHello
         version: PROTOCOL_VERSION,
         nonce,
         peer: identity.peer_id(),
-        display_name: identity.display_name().to_owned(),
+        display_name: identity.display_name(),
         listen_port,
     };
     let bytes = postcard::to_stdvec(&body).context("encode peer hello")?;

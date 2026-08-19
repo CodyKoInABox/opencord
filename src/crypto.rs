@@ -4,6 +4,7 @@ use anyhow::{Context, bail};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce, aead::Aead};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
@@ -13,10 +14,18 @@ use crate::model::{
 
 const IDENTITY_FILE_VERSION: u16 = 1;
 
-#[derive(Clone)]
 pub struct Identity {
     signing_key: SigningKey,
-    display_name: String,
+    display_name: RwLock<String>,
+}
+
+impl Clone for Identity {
+    fn clone(&self) -> Self {
+        Self {
+            signing_key: self.signing_key.clone(),
+            display_name: RwLock::new(self.display_name()),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,7 +41,7 @@ impl Identity {
         getrandom::fill(&mut secret).expect("operating system randomness unavailable");
         Self {
             signing_key: SigningKey::from_bytes(&secret),
-            display_name: sanitize_name(&display_name.into()),
+            display_name: RwLock::new(sanitize_name(&display_name.into())),
         }
     }
 
@@ -56,7 +65,7 @@ impl Identity {
                 .unwrap_or_else(|| sanitize_name(&file.display_name));
             return Ok(Self {
                 signing_key: SigningKey::from_bytes(&bytes),
-                display_name,
+                display_name: RwLock::new(display_name),
             });
         }
 
@@ -71,13 +80,19 @@ impl Identity {
         }
         let file = IdentityFile {
             version: IDENTITY_FILE_VERSION,
-            display_name: self.display_name.clone(),
+            display_name: self.display_name(),
             secret: URL_SAFE_NO_PAD.encode(self.signing_key.to_bytes()),
         };
         let encoded = postcard::to_stdvec(&file).context("encode identity")?;
         let temporary = path.with_extension("tmp");
         fs::write(&temporary, encoded).with_context(|| format!("write {}", temporary.display()))?;
-        fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+        if path.exists() {
+            fs::copy(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+            fs::remove_file(&temporary)
+                .with_context(|| format!("remove {}", temporary.display()))?;
+        } else {
+            fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+        }
         Ok(())
     }
 
@@ -85,12 +100,12 @@ impl Identity {
         PeerId(self.signing_key.verifying_key().to_bytes())
     }
 
-    pub fn display_name(&self) -> &str {
-        &self.display_name
+    pub fn display_name(&self) -> String {
+        self.display_name.read().clone()
     }
 
-    pub fn rename(&mut self, display_name: &str) {
-        self.display_name = sanitize_name(display_name);
+    pub fn rename(&self, display_name: &str) {
+        *self.display_name.write() = sanitize_name(display_name);
     }
 
     pub fn sign(&self, bytes: &[u8]) -> Vec<u8> {
@@ -269,5 +284,19 @@ mod tests {
         let mut tampered = event;
         tampered.ciphertext[0] ^= 1;
         assert!(validate_and_open_event(&tampered, &secret).is_err());
+    }
+
+    #[test]
+    fn identity_profile_rename_preserves_the_peer_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("identity.bin");
+        let identity = Identity::load_or_create(&path, Some("Alice")).unwrap();
+        let peer_id = identity.peer_id();
+        identity.rename("Cody");
+        identity.save(&path).unwrap();
+
+        let reloaded = Identity::load_or_create(&path, None).unwrap();
+        assert_eq!(reloaded.peer_id(), peer_id);
+        assert_eq!(reloaded.display_name(), "Cody");
     }
 }

@@ -422,7 +422,7 @@ impl Store {
             group_secret: group.secret,
             channels,
             inviter: identity.peer_id(),
-            inviter_name: identity.display_name().to_owned(),
+            inviter_name: identity.display_name(),
             endpoints,
             created_at_ms: now_ms(),
         };

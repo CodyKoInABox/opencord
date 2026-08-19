@@ -56,6 +56,7 @@ impl NodeOptions {
 
 pub struct Node {
     identity: Arc<Identity>,
+    identity_path: PathBuf,
     store: Arc<Mutex<Store>>,
     runtime: Runtime,
     endpoint: Endpoint,
@@ -75,8 +76,9 @@ impl Node {
     pub fn start(options: NodeOptions) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&options.data_dir)
             .with_context(|| format!("create {}", options.data_dir.display()))?;
+        let identity_path = options.data_dir.join("identity.ocid");
         let identity = Arc::new(Identity::load_or_create(
-            &options.data_dir.join("identity.ocid"),
+            &identity_path,
             options.display_name.as_deref(),
         )?);
         let store = Arc::new(Mutex::new(Store::open(
@@ -153,6 +155,7 @@ impl Node {
         }
         Ok(Self {
             identity,
+            identity_path,
             store,
             runtime,
             endpoint,
@@ -171,6 +174,14 @@ impl Node {
 
     pub fn identity(&self) -> &Identity {
         &self.identity
+    }
+
+    pub fn rename_profile(&self, display_name: &str) -> anyhow::Result<String> {
+        self.identity.rename(display_name);
+        self.identity.save(&self.identity_path)?;
+        let name = self.identity.display_name();
+        self.state.note(format!("Profile updated to {name}"));
+        Ok(name)
     }
 
     pub fn snapshot(&self) -> NetworkSnapshot {
@@ -251,7 +262,7 @@ impl Node {
             .append(&self.identity, channel_id, &payload)?;
         let _ = self.live_events.send(LiveEvent {
             event: Arc::new(event.clone()),
-            author_name: self.identity.display_name().to_owned(),
+            author_name: self.identity.display_name(),
         });
         self.state.bump();
         Ok(event)
