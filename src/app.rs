@@ -7,8 +7,8 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Frame, Id, Layout, Margin, RichText,
-    ScrollArea, Sense, Stroke, Vec2,
+    self, Align, Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Id, Layout, Margin,
+    Rect, RichText, ScrollArea, Sense, Stroke, Vec2,
 };
 use opencord::{
     AudioEngine, Channel, ChannelId, Group, GroupId, IncomingScreen, MessagePayload,
@@ -19,6 +19,29 @@ use crate::settings::{AccentChoice, AppSettings, MessageDensity, ThemeChoice};
 
 const GREEN: Color32 = Color32::from_rgb(72, 200, 142);
 const RED: Color32 = Color32::from_rgb(239, 93, 112);
+
+const RAIL_WIDTH: f32 = 76.0;
+const SIDEBAR_WIDTH: f32 = 252.0;
+const MEMBERS_WIDTH: f32 = 232.0;
+const HEADER_HEIGHT: f32 = 64.0;
+const SPACE_XS: f32 = 4.0;
+const SPACE_SM: f32 = 8.0;
+const SPACE_MD: f32 = 12.0;
+const SPACE_LG: f32 = 16.0;
+const SPACE_XL: f32 = 24.0;
+const RADIUS_SM: u8 = 6;
+const RADIUS_MD: u8 = 10;
+const RADIUS_LG: u8 = 14;
+
+trait PointerCursor {
+    fn pointer_cursor(self) -> Self;
+}
+
+impl PointerCursor for egui::Response {
+    fn pointer_cursor(self) -> Self {
+        self.on_hover_cursor(CursorIcon::PointingHand)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct ThemePalette {
@@ -36,6 +59,33 @@ struct ThemePalette {
 enum MessageAction {
     SaveAttachment(String, Vec<u8>),
     Reply(String),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SettingsSection {
+    #[default]
+    Profile,
+    Appearance,
+    Chat,
+    Connection,
+}
+
+impl SettingsSection {
+    const ALL: [Self; 4] = [
+        Self::Profile,
+        Self::Appearance,
+        Self::Chat,
+        Self::Connection,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Profile => "Profile",
+            Self::Appearance => "Appearance",
+            Self::Chat => "Chat",
+            Self::Connection => "Connection",
+        }
+    }
 }
 
 fn theme_palette(theme: ThemeChoice) -> ThemePalette {
@@ -113,6 +163,7 @@ pub struct OpencordApp {
     data_dir: PathBuf,
     settings: AppSettings,
     profile_name_draft: String,
+    settings_section: SettingsSection,
     audio: AudioEngine,
     screen_share: ScreenShare,
     screen_receiver: tokio::sync::broadcast::Receiver<IncomingScreen>,
@@ -154,6 +205,7 @@ impl OpencordApp {
             node,
             data_dir,
             profile_name_draft: settings.profile_name.clone(),
+            settings_section: SettingsSection::default(),
             settings,
             audio: AudioEngine::default(),
             screen_share: ScreenShare::default(),
@@ -309,6 +361,16 @@ impl OpencordApp {
         }
     }
 
+    fn toggle_screen_share(&mut self) {
+        if self.screen_share.snapshot().group_id.is_some() {
+            self.screen_share.stop();
+        } else if let Some(group) = self.selected_group
+            && let Err(error) = self.screen_share.start(&self.node, group)
+        {
+            self.error(error);
+        }
+    }
+
     fn notice(&mut self, message: impl Into<String>) {
         self.toast = Some((message.into(), Instant::now(), false));
     }
@@ -331,35 +393,35 @@ impl OpencordApp {
         let palette = theme_palette(self.settings.theme);
         let accent = accent_color(self.settings.accent);
         egui::Panel::left("server_rail")
-            .exact_size(72.0)
+            .exact_size(RAIL_WIDTH)
             .resizable(false)
             .frame(
                 Frame::new()
                     .fill(palette.rail)
-                    .inner_margin(Margin::symmetric(10, 12)),
+                    .inner_margin(Margin::symmetric(14, 12)),
             )
             .show(root, |ui| {
                 ui.vertical_centered(|ui| {
                     if brand_mark(ui).on_hover_text("About Opencord").clicked() {
                         self.modal = Some(Modal::About);
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_MD);
                     ui.separator();
-                    ui.add_space(10.0);
+                    ui.add_space(SPACE_MD);
                     let groups = self.groups.clone();
                     for group in groups {
                         let selected = self.selected_group == Some(group.id);
                         if server_button(ui, &group, selected).clicked() {
                             self.select_group(group.id);
                         }
-                        ui.add_space(7.0);
+                        ui.add_space(SPACE_SM);
                     }
                     if round_icon_button(ui, "+", GREEN, "Create a group").clicked() {
                         self.modal = Some(Modal::CreateGroup {
                             name: String::new(),
                         });
                     }
-                    ui.add_space(7.0);
+                    ui.add_space(SPACE_SM);
                     if round_icon_button(ui, ">", accent, "Join with an encrypted invite").clicked()
                     {
                         self.modal = Some(Modal::JoinGroup {
@@ -372,255 +434,300 @@ impl OpencordApp {
 
     fn render_channels(&mut self, root: &mut egui::Ui) {
         let palette = theme_palette(self.settings.theme);
-        let accent = accent_color(self.settings.accent);
         egui::Panel::left("channel_sidebar")
-            .exact_size(242.0)
+            .exact_size(SIDEBAR_WIDTH)
             .resizable(false)
             .frame(Frame::new().fill(palette.sidebar))
             .show(root, |ui| {
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(14.0);
-                    ui.label(
-                        RichText::new(
-                            self.current_group()
-                                .map(|g| g.name.as_str())
-                                .unwrap_or("No group"),
-                        )
-                        .size(16.0)
-                        .strong()
-                        .color(palette.text),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.menu_button("•••", |ui| {
-                            if ui.button("Invite people").clicked() {
-                                if let Some(group) = self.selected_group {
-                                    match self.node.invite(group) {
-                                        Ok(value) => self.modal = Some(Modal::Invite { value }),
-                                        Err(error) => self.error(error),
+                egui::Panel::top("group_header")
+                    .exact_size(HEADER_HEIGHT)
+                    .frame(
+                        Frame::new()
+                            .fill(palette.sidebar)
+                            .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_MD as i8))
+                            .stroke(Stroke::new(1.0, palette.border)),
+                    )
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(
+                                    self.current_group()
+                                        .map(|group| group.name.as_str())
+                                        .unwrap_or("Choose a group"),
+                                )
+                                .size(15.0)
+                                .strong()
+                                .color(palette.text),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let menu = ui.menu_button("•••", |ui| {
+                                    if secondary_button(ui, "Invite people").clicked() {
+                                        if let Some(group) = self.selected_group {
+                                            match self.node.invite(group) {
+                                                Ok(value) => {
+                                                    self.modal = Some(Modal::Invite { value })
+                                                }
+                                                Err(error) => self.error(error),
+                                            }
+                                        }
+                                        ui.close();
                                     }
-                                }
-                                ui.close();
-                            }
-                            if ui.button("Create channel").clicked() {
-                                self.modal = Some(Modal::CreateChannel {
-                                    name: String::new(),
+                                    if secondary_button(ui, "Create channel").clicked() {
+                                        self.modal = Some(Modal::CreateChannel {
+                                            name: String::new(),
+                                        });
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if secondary_button(ui, "Settings").clicked() {
+                                        self.modal = Some(Modal::Settings);
+                                        ui.close();
+                                    }
                                 });
-                                ui.close();
-                            }
-                            ui.separator();
-                            if ui.button("Settings").clicked() {
-                                self.modal = Some(Modal::Settings);
-                                ui.close();
-                            }
+                                menu.response.pointer_cursor();
+                            });
                         });
                     });
-                });
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new("TEXT CHANNELS")
-                            .size(11.0)
-                            .strong()
-                            .color(palette.muted),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .small_button("+")
-                            .on_hover_text("Create channel")
-                            .clicked()
-                        {
-                            self.modal = Some(Modal::CreateChannel {
-                                name: String::new(),
-                            });
-                        }
-                    });
-                });
-                ui.add_space(4.0);
-                let channels = self.channels.clone();
-                for channel in channels {
-                    let selected = self.selected_channel == Some(channel.id);
-                    let has_draft = self.drafts.contains_key(&channel.id);
-                    let response = ui.add_sized(
-                        [ui.available_width(), 34.0],
-                        egui::Button::new(
-                            RichText::new(format!(
-                                "#  {}{}",
-                                channel.name,
-                                if has_draft { "  •" } else { "" }
-                            ))
-                            .color(if selected {
-                                Color32::WHITE
-                            } else {
-                                palette.muted
-                            }),
-                        )
-                        .selected(selected)
-                        .fill(if selected {
-                            accent
-                        } else {
-                            Color32::TRANSPARENT
-                        })
-                        .corner_radius(6),
-                    );
-                    if response.clicked() {
-                        self.select_channel(channel.id);
-                    }
-                }
 
-                ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), 58.0),
-                        Layout::top_down(Align::Min),
-                        |ui| user_panel(ui, &self.node, &mut self.modal),
-                    );
-                    let audio = self.audio.snapshot();
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), 118.0),
-                        Layout::top_down(Align::Min),
-                        |ui| {
-                            if let Some(group_id) = audio.group_id {
-                                Frame::new()
-                                    .fill(Color32::from_rgb(28, 42, 39))
-                                    .inner_margin(12)
-                                    .show(ui, |ui| {
-                                        ui.label(
-                                            RichText::new("● Voice connected")
-                                                .color(GREEN)
-                                                .strong(),
-                                        );
-                                        ui.label(
-                                            RichText::new("Direct encrypted mesh")
-                                                .size(11.0)
-                                                .color(palette.muted),
-                                        );
-                                        ui.horizontal(|ui| {
-                                            let muted = audio.muted;
-                                            if ui
-                                                .button(if muted { "Unmute" } else { "Mute" })
-                                                .clicked()
-                                            {
-                                                self.audio.set_muted(!muted);
-                                            }
-                                            if ui.button("Leave").clicked() {
-                                                self.audio.leave();
-                                            }
-                                        });
-                                        let _ = group_id;
-                                    });
-                            } else if let Some(group_id) = self.selected_group {
-                                Frame::new().fill(palette.surface).inner_margin(12).show(
-                                    ui,
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new("Voice lounge")
-                                                .strong()
-                                                .color(palette.text),
-                                        );
-                                        ui.label(
-                                            RichText::new("Peer-to-peer group call")
-                                                .size(11.0)
-                                                .color(palette.muted),
-                                        );
-                                        if ui.button("Join voice").clicked()
-                                            && let Err(error) =
-                                                self.audio.join(&self.node, group_id)
-                                        {
-                                            self.error(error);
-                                        }
-                                    },
-                                );
+                egui::Panel::bottom("identity_panel")
+                    .exact_size(68.0)
+                    .frame(Frame::new().fill(palette.rail))
+                    .show(ui, |ui| {
+                        user_panel(ui, &self.node, &mut self.modal);
+                    });
+
+                egui::Panel::bottom("voice_panel")
+                    .exact_size(126.0)
+                    .frame(
+                        Frame::new()
+                            .fill(palette.sidebar)
+                            .inner_margin(Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8)),
+                    )
+                    .show(ui, |ui| {
+                        let audio = self.audio.snapshot();
+                        let connected = audio.group_id.is_some();
+                        let card_fill = if connected {
+                            if palette.dark {
+                                Color32::from_rgb(24, 48, 42)
+                            } else {
+                                Color32::from_rgb(223, 244, 237)
                             }
-                        },
-                    );
-                });
+                        } else {
+                            palette.surface
+                        };
+                        Frame::new()
+                            .fill(card_fill)
+                            .corner_radius(RADIUS_MD)
+                            .inner_margin(Margin::symmetric(SPACE_MD as i8, SPACE_MD as i8))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(if connected {
+                                        "Voice connected"
+                                    } else {
+                                        "Voice lounge"
+                                    })
+                                    .strong()
+                                    .color(if connected {
+                                        GREEN
+                                    } else {
+                                        palette.text
+                                    }),
+                                );
+                                ui.label(
+                                    RichText::new(if connected {
+                                        "Direct encrypted mesh"
+                                    } else {
+                                        "Peer-to-peer group call"
+                                    })
+                                    .size(11.0)
+                                    .color(palette.muted),
+                                );
+                                ui.add_space(SPACE_XS);
+                                if connected {
+                                    ui.horizontal(|ui| {
+                                        let muted = audio.muted;
+                                        if secondary_button(
+                                            ui,
+                                            if muted { "Unmute" } else { "Mute" },
+                                        )
+                                        .clicked()
+                                        {
+                                            self.audio.set_muted(!muted);
+                                        }
+                                        if secondary_button(ui, "Leave").clicked() {
+                                            self.audio.leave();
+                                        }
+                                    });
+                                } else if let Some(group_id) = self.selected_group
+                                    && secondary_button(ui, "Join voice").clicked()
+                                    && let Err(error) = self.audio.join(&self.node, group_id)
+                                {
+                                    self.error(error);
+                                }
+                            });
+                    });
+
+                egui::CentralPanel::default()
+                    .frame(
+                        Frame::new()
+                            .fill(palette.sidebar)
+                            .inner_margin(Margin::symmetric(SPACE_SM as i8, SPACE_MD as i8)),
+                    )
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            section_label(ui, "Text channels");
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if quiet_button(ui, "+")
+                                    .on_hover_text("Create channel")
+                                    .clicked()
+                                {
+                                    self.modal = Some(Modal::CreateChannel {
+                                        name: String::new(),
+                                    });
+                                }
+                            });
+                        });
+                        ui.add_space(SPACE_XS);
+                        ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for channel in self.channels.clone() {
+                                    if channel_button(
+                                        ui,
+                                        &channel.name,
+                                        self.selected_channel == Some(channel.id),
+                                        self.drafts.contains_key(&channel.id),
+                                    )
+                                    .clicked()
+                                    {
+                                        self.select_channel(channel.id);
+                                    }
+                                    ui.add_space(2.0);
+                                }
+                            });
+                    });
             });
     }
 
     fn render_members(&mut self, root: &mut egui::Ui) {
         let palette = theme_palette(self.settings.theme);
         egui::Panel::right("members")
-            .exact_size(220.0)
+            .exact_size(MEMBERS_WIDTH)
             .resizable(false)
-            .frame(Frame::new().fill(palette.sidebar).inner_margin(14))
+            .frame(Frame::new().fill(palette.sidebar))
             .show(root, |ui| {
-                ui.label(
-                    RichText::new(format!("ONLINE — {}", self.network.online_peers.len() + 1))
-                        .size(11.0)
-                        .strong()
-                        .color(palette.muted),
-                );
-                ui.add_space(10.0);
-                member_row(
-                    ui,
-                    &self.node.identity().display_name(),
-                    true,
-                    self.audio.snapshot().group_id.is_some(),
-                );
-                let peers = self.network.online_peers.clone();
-                for peer in peers {
-                    if self
-                        .selected_group
-                        .is_none_or(|group| peer.shared_groups.contains(&group))
-                    {
-                        ui.horizontal(|ui| {
-                            member_row(ui, &peer.name, true, false);
-                            if ui
-                                .small_button("Block")
-                                .on_hover_text("Reject this identity locally")
-                                .clicked()
+                egui::Panel::bottom("member_connection")
+                    .exact_size(142.0)
+                    .frame(
+                        Frame::new()
+                            .fill(palette.sidebar)
+                            .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_MD as i8)),
+                    )
+                    .show(ui, |ui| {
+                        Frame::new()
+                            .fill(palette.surface)
+                            .corner_radius(RADIUS_MD)
+                            .inner_margin(Margin::symmetric(SPACE_MD as i8, SPACE_MD as i8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.painter().circle_filled(
+                                        ui.next_widget_position() + Vec2::new(5.0, 8.0),
+                                        4.0,
+                                        GREEN,
+                                    );
+                                    ui.add_space(12.0);
+                                    ui.label(
+                                        RichText::new("Direct mesh").strong().color(palette.text),
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new("End-to-end encrypted")
+                                        .size(11.0)
+                                        .color(palette.muted),
+                                );
+                                if let Some(address) = self.network.listen_address {
+                                    ui.add_space(SPACE_XS);
+                                    ui.label(
+                                        RichText::new(address.to_string())
+                                            .monospace()
+                                            .size(9.0)
+                                            .color(palette.muted),
+                                    );
+                                }
+                            });
+                    });
+
+                egui::CentralPanel::default()
+                    .frame(
+                        Frame::new()
+                            .fill(palette.sidebar)
+                            .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_LG as i8)),
+                    )
+                    .show(ui, |ui| {
+                        section_label(
+                            ui,
+                            &format!("Members — {}", self.network.online_peers.len() + 1),
+                        );
+                        ui.add_space(SPACE_SM);
+                        member_row(
+                            ui,
+                            &self.node.identity().display_name(),
+                            true,
+                            self.audio.snapshot().group_id.is_some(),
+                        );
+                        for peer in self.network.online_peers.clone() {
+                            if self
+                                .selected_group
+                                .is_none_or(|group| peer.shared_groups.contains(&group))
                             {
-                                match self.node.block_peer(peer.id) {
-                                    Ok(()) => self.notice(format!("Blocked {}", peer.name)),
-                                    Err(error) => self.error(error),
+                                let mut block = false;
+                                ui.horizontal(|ui| {
+                                    member_row(ui, &peer.name, true, false);
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        let menu = ui.menu_button("•••", |ui| {
+                                            if secondary_button(ui, "Block peer").clicked() {
+                                                block = true;
+                                                ui.close();
+                                            }
+                                        });
+                                        menu.response.pointer_cursor();
+                                    });
+                                });
+                                if block {
+                                    match self.node.block_peer(peer.id) {
+                                        Ok(()) => self.notice(format!("Blocked {}", peer.name)),
+                                        Err(error) => self.error(error),
+                                    }
                                 }
                             }
-                        });
-                    }
-                }
-                ui.add_space(20.0);
-                ui.label(
-                    RichText::new("CONNECTION")
-                        .size(11.0)
-                        .strong()
-                        .color(palette.muted),
-                );
-                ui.add_space(8.0);
-                ui.label(RichText::new("Peer-to-peer mesh").color(GREEN).strong());
-                ui.label(
-                    RichText::new("End-to-end encrypted")
-                        .size(12.0)
-                        .color(palette.muted),
-                );
-                if let Some(address) = self.network.listen_address {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!("UDP {address}"))
-                            .monospace()
-                            .size(10.0)
-                            .color(palette.muted),
-                    );
-                }
+                        }
+                    });
             });
     }
 
     fn render_header(&mut self, root: &mut egui::Ui) {
         let palette = theme_palette(self.settings.theme);
         egui::Panel::top("chat_header")
-            .exact_size(58.0)
+            .exact_size(HEADER_HEIGHT)
             .frame(
                 Frame::new()
                     .fill(palette.canvas)
-                    .inner_margin(Margin::symmetric(18, 10))
-                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(48, 52, 62))),
+                    .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_MD as i8))
+                    .stroke(Stroke::new(1.0, palette.border)),
             )
             .show(root, |ui| {
-                let show_status = ui.available_width() >= 560.0;
+                let available = ui.available_width();
+                let show_status = available >= 680.0;
+                let show_connect = available >= 650.0;
+                let show_share = available >= 540.0;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("#").size(22.0).color(palette.muted));
+                    Frame::new()
+                        .fill(palette.surface)
+                        .corner_radius(RADIUS_SM)
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("#").size(18.0).color(palette.muted));
+                        });
                     ui.label(
                         RichText::new(
                             self.current_channel()
@@ -632,32 +739,52 @@ impl OpencordApp {
                         .color(palette.text),
                     );
                     if show_status {
-                        ui.separator();
-                        ui.label(
-                            RichText::new("End-to-end encrypted • local history")
-                                .size(12.0)
-                                .color(palette.muted),
-                        );
+                        ui.add_space(SPACE_SM);
+                        status_badge(ui, "End-to-end encrypted", GREEN, palette.surface);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let sharing = self.screen_share.snapshot().group_id.is_some();
-                        if ui
-                            .button(if sharing {
-                                "Stop sharing"
-                            } else {
-                                "Share screen"
-                            })
+                        if !show_share || !show_connect {
+                            let menu = ui.menu_button("More", |ui| {
+                                if !show_share
+                                    && secondary_button(
+                                        ui,
+                                        if sharing {
+                                            "Stop sharing"
+                                        } else {
+                                            "Share screen"
+                                        },
+                                    )
+                                    .clicked()
+                                {
+                                    self.toggle_screen_share();
+                                    ui.close();
+                                }
+                                if !show_connect
+                                    && secondary_button(ui, "Connect directly").clicked()
+                                {
+                                    self.modal = Some(Modal::Connect {
+                                        address: String::new(),
+                                    });
+                                    ui.close();
+                                }
+                            });
+                            menu.response.pointer_cursor();
+                        }
+                        if show_share
+                            && secondary_button(
+                                ui,
+                                if sharing {
+                                    "Stop sharing"
+                                } else {
+                                    "Share screen"
+                                },
+                            )
                             .clicked()
                         {
-                            if sharing {
-                                self.screen_share.stop();
-                            } else if let Some(group) = self.selected_group
-                                && let Err(error) = self.screen_share.start(&self.node, group)
-                            {
-                                self.error(error);
-                            }
+                            self.toggle_screen_share();
                         }
-                        if ui.button("Invite").clicked()
+                        if secondary_button(ui, "Invite").clicked()
                             && let Some(group) = self.selected_group
                         {
                             match self.node.invite(group) {
@@ -665,14 +792,14 @@ impl OpencordApp {
                                 Err(error) => self.error(error),
                             }
                         }
-                        if ui.button("Connect").clicked() {
+                        if show_connect && secondary_button(ui, "Connect").clicked() {
                             self.modal = Some(Modal::Connect {
                                 address: String::new(),
                             });
                         }
                         if self.search_open {
                             let search = ui.add_sized(
-                                [180.0, 30.0],
+                                [190.0, 36.0],
                                 egui::TextEdit::singleline(&mut self.search_query)
                                     .hint_text("Search this channel")
                                     .id(Id::new("channel_search")),
@@ -683,8 +810,7 @@ impl OpencordApp {
                                 self.search_open = false;
                                 self.search_query.clear();
                             }
-                        } else if ui
-                            .button("Search")
+                        } else if secondary_button(ui, "Search   Ctrl+F")
                             .on_hover_text("Search this channel (Ctrl+F)")
                             .clicked()
                         {
@@ -699,10 +825,12 @@ impl OpencordApp {
     fn render_composer(&mut self, root: &mut egui::Ui) {
         let palette = theme_palette(self.settings.theme);
         egui::Panel::bottom("composer")
+            .exact_size(108.0)
             .frame(
                 Frame::new()
                     .fill(palette.canvas)
-                    .inner_margin(Margin::symmetric(18, 14)),
+                    .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_SM as i8))
+                    .stroke(Stroke::new(1.0, palette.border)),
             )
             .show(root, |ui| {
                 if self.selected_channel.is_none() {
@@ -710,12 +838,12 @@ impl OpencordApp {
                 }
                 Frame::new()
                     .fill(palette.surface)
-                    .corner_radius(10)
-                    .inner_margin(Margin::symmetric(10, 8))
+                    .corner_radius(RADIUS_MD)
+                    .stroke(Stroke::new(1.0, palette.border))
+                    .inner_margin(Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if ui
-                                .add(egui::Button::new(RichText::new("+").size(20.0)).frame(false))
+                            if quiet_button(ui, "+")
                                 .on_hover_text("Attach a file (8 MiB max)")
                                 .clicked()
                                 && let Some(path) = rfd::FileDialog::new().pick_file()
@@ -727,7 +855,7 @@ impl OpencordApp {
                                 .map(|channel| channel.name.clone())
                                 .unwrap_or_default();
                             let edit = ui.add_sized(
-                                [ui.available_width() - 74.0, 38.0],
+                                [ui.available_width() - 76.0, 40.0],
                                 egui::TextEdit::multiline(&mut self.composer)
                                     .desired_rows(1)
                                     .hint_text(format!("Message #{channel_name}"))
@@ -742,22 +870,34 @@ impl OpencordApp {
                             if enter {
                                 self.send_composer();
                             }
-                            if ui.button("Send").clicked() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Send").strong().color(Color32::WHITE),
+                                    )
+                                    .fill(accent_color(self.settings.accent))
+                                    .corner_radius(RADIUS_SM)
+                                    .min_size(Vec2::new(64.0, 36.0)),
+                                )
+                                .pointer_cursor()
+                                .clicked()
+                            {
                                 self.send_composer();
                             }
                         });
                     });
-                ui.add_space(4.0);
+                ui.add_space(SPACE_XS);
                 let send_hint = if self.settings.enter_to_send {
-                    "Enter to send • Shift+Enter for a new line"
+                    "Enter to send  •  Shift+Enter for a new line"
                 } else {
                     "Use Send when your message is ready"
                 };
-                ui.label(
-                    RichText::new(format!("{send_hint} • End-to-end encrypted"))
-                        .size(10.0)
-                        .color(palette.muted),
-                );
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Encrypted").size(10.0).strong().color(GREEN));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(send_hint).size(10.0).color(palette.muted));
+                    });
+                });
             });
     }
 
@@ -767,7 +907,7 @@ impl OpencordApp {
             .frame(
                 Frame::new()
                     .fill(palette.canvas)
-                    .inner_margin(Margin::symmetric(20, 12)),
+                    .inner_margin(Margin::symmetric(SPACE_LG as i8, SPACE_LG as i8)),
             )
             .show(root, |ui| {
                 if self.groups.is_empty() {
@@ -794,7 +934,7 @@ impl OpencordApp {
                                             .color(RED)
                                             .strong(),
                                         );
-                                        if ui.button("Close view").clicked() {
+                                        if secondary_button(ui, "Close view").clicked() {
                                             self.screen_texture = None;
                                             self.screen_owner = None;
                                         }
@@ -809,31 +949,62 @@ impl OpencordApp {
                                 });
                             ui.add_space(12.0);
                         }
-                        ui.add_space(if compact { 4.0 } else { 16.0 });
-                        if self.settings.show_channel_intro {
+                        ui.add_space(if compact { SPACE_XS } else { SPACE_SM });
+                        if self.settings.show_channel_intro && self.search_query.is_empty() {
                             channel_intro(ui, self.current_channel(), compact);
-                            ui.add_space(if compact { 12.0 } else { 22.0 });
+                            ui.add_space(if compact { SPACE_MD } else { SPACE_XL });
+                        } else if !self.search_query.is_empty() {
+                            let matches = self
+                                .timeline
+                                .iter()
+                                .filter(|entry| message_matches(entry, &self.search_query))
+                                .count();
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} result{} for “{}”",
+                                        matches,
+                                        if matches == 1 { "" } else { "s" },
+                                        self.search_query.trim()
+                                    ))
+                                    .strong(),
+                                );
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if quiet_button(ui, "Clear").clicked() {
+                                        self.search_query.clear();
+                                        self.search_open = false;
+                                    }
+                                });
+                            });
+                            ui.add_space(SPACE_LG);
                         }
                         let mut message_action = None;
-                        for entry in &self.timeline {
+                        for (index, entry) in self.timeline.iter().enumerate() {
                             if !self.search_query.is_empty()
                                 && !message_matches(entry, &self.search_query)
                             {
                                 continue;
                             }
+                            let grouped = index.checked_sub(1).is_some_and(|previous| {
+                                let before = &self.timeline[previous];
+                                before.event.header.author == entry.event.header.author
+                                    && entry
+                                        .event
+                                        .header
+                                        .sent_at_ms
+                                        .saturating_sub(before.event.header.sent_at_ms)
+                                        < 5 * 60 * 1_000
+                            });
                             if let Some(action) = message_row(
                                 ui,
                                 entry,
                                 self.settings.show_message_ids,
                                 self.settings.density,
+                                grouped,
                             ) {
                                 message_action = Some(action);
                             }
-                            ui.add_space(if self.settings.density == MessageDensity::Compact {
-                                0.0
-                            } else {
-                                4.0
-                            });
+                            ui.add_space(if grouped { 0.0 } else { SPACE_XS });
                         }
                         match message_action {
                             Some(MessageAction::SaveAttachment(name, bytes)) => {
@@ -859,6 +1030,392 @@ impl OpencordApp {
             });
     }
 
+    fn render_settings_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: ThemePalette,
+        settings_changed: &mut bool,
+        save_profile: &mut bool,
+    ) {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(164.0, 410.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    section_label(ui, "User settings");
+                    ui.add_space(SPACE_SM);
+                    for section in SettingsSection::ALL {
+                        if settings_nav_button(ui, section, self.settings_section == section)
+                            .clicked()
+                        {
+                            self.settings_section = section;
+                        }
+                        ui.add_space(2.0);
+                    }
+                    ui.add_space(180.0);
+                    ui.label(
+                        RichText::new(format!("Opencord {}", env!("CARGO_PKG_VERSION")))
+                            .size(10.0)
+                            .color(palette.muted),
+                    );
+                },
+            );
+            ui.separator();
+            ui.add_space(SPACE_LG);
+            ui.allocate_ui_with_layout(
+                Vec2::new(540.0, 410.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ScrollArea::vertical()
+                        .max_height(390.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.settings_section {
+                            SettingsSection::Profile => {
+                                settings_heading(ui, "Profile", "How you appear to other peers");
+                                Frame::new()
+                                    .fill(palette.surface)
+                                    .corner_radius(RADIUS_LG)
+                                    .inner_margin(Margin::symmetric(18, 18))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            avatar(ui, &self.profile_name_draft, true, 52.0);
+                                            ui.add_space(SPACE_SM);
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new("Display name")
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(palette.muted),
+                                                );
+                                                ui.add_sized(
+                                                    [300.0, 38.0],
+                                                    egui::TextEdit::singleline(
+                                                        &mut self.profile_name_draft,
+                                                    )
+                                                    .hint_text("Display name"),
+                                                );
+                                            });
+                                        });
+                                        ui.add_space(SPACE_LG);
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "Peer ID {}",
+                                                    self.node.identity().peer_id().short()
+                                                ))
+                                                .monospace()
+                                                .size(10.0)
+                                                .color(palette.muted),
+                                            );
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    if primary_button(ui, "Save profile").clicked()
+                                                    {
+                                                        *save_profile = true;
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                ui.add_space(SPACE_LG);
+                                ui.label(
+                                    RichText::new(
+                                        "Your display name is signed with your local identity and shared on new peer connections.",
+                                    )
+                                    .size(11.0)
+                                    .color(palette.muted),
+                                );
+                            }
+                            SettingsSection::Appearance => {
+                                settings_heading(
+                                    ui,
+                                    "Appearance",
+                                    "Make Opencord comfortable on your display",
+                                );
+                                section_label(ui, "Theme");
+                                ui.add_space(SPACE_SM);
+                                ui.horizontal_wrapped(|ui| {
+                                    for theme in ThemeChoice::ALL {
+                                        let swatch = theme_palette(theme);
+                                        let selected = self.settings.theme == theme;
+                                        let response = Frame::new()
+                                            .fill(swatch.canvas)
+                                            .stroke(Stroke::new(
+                                                if selected { 2.0 } else { 1.0 },
+                                                if selected {
+                                                    accent_color(self.settings.accent)
+                                                } else {
+                                                    swatch.border
+                                                },
+                                            ))
+                                            .corner_radius(RADIUS_MD)
+                                            .inner_margin(Margin::symmetric(16, 14))
+                                            .show(ui, |ui| {
+                                                ui.set_min_width(100.0);
+                                                ui.label(
+                                                    RichText::new(theme.label())
+                                                        .color(swatch.text)
+                                                        .strong(),
+                                                );
+                                                ui.label(
+                                                    RichText::new(if swatch.dark {
+                                                        "Dark"
+                                                    } else {
+                                                        "Light"
+                                                    })
+                                                    .size(10.0)
+                                                    .color(swatch.muted),
+                                                );
+                                            })
+                                            .response
+                                            .interact(Sense::click())
+                                            .pointer_cursor();
+                                        if response.clicked() && !selected {
+                                            self.settings.theme = theme;
+                                            *settings_changed = true;
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(SPACE_LG);
+                                section_label(ui, "Accent color");
+                                ui.add_space(SPACE_SM);
+                                ui.horizontal(|ui| {
+                                    for accent in AccentChoice::ALL {
+                                        let selected = self.settings.accent == accent;
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new(accent.label())
+                                                        .color(Color32::WHITE),
+                                                )
+                                                .fill(accent_color(accent))
+                                                .stroke(Stroke::new(
+                                                    if selected { 2.0 } else { 0.0 },
+                                                    Color32::WHITE,
+                                                ))
+                                                .corner_radius(RADIUS_SM)
+                                                .min_size(Vec2::new(76.0, 36.0)),
+                                            )
+                                            .pointer_cursor()
+                                            .clicked()
+                                            && !selected
+                                        {
+                                            self.settings.accent = accent;
+                                            *settings_changed = true;
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(SPACE_LG);
+                                Frame::new()
+                                    .fill(palette.surface)
+                                    .corner_radius(RADIUS_MD)
+                                    .inner_margin(Margin::symmetric(16, 14))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new("Interface scale").strong(),
+                                                );
+                                                ui.label(
+                                                    RichText::new("Resize text and controls")
+                                                        .size(11.0)
+                                                        .color(palette.muted),
+                                                );
+                                            });
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    ui.label(
+                                                        RichText::new(format!(
+                                                            "{:.0}%",
+                                                            self.settings.ui_scale * 100.0
+                                                        ))
+                                                        .monospace()
+                                                        .size(11.0),
+                                                    );
+                                                    *settings_changed |= ui
+                                                        .scope(|ui| {
+                                                            ui.spacing_mut().slider_width = 160.0;
+                                                            ui.spacing_mut().slider_rail_height = 4.0;
+                                                            ui.visuals_mut()
+                                                                .widgets
+                                                                .inactive
+                                                                .bg_fill = palette.surface_hover;
+                                                            ui.add(
+                                                            egui::Slider::new(
+                                                                &mut self.settings.ui_scale,
+                                                                0.85..=1.20,
+                                                            )
+                                                            .step_by(0.05)
+                                                                .show_value(false),
+                                                            )
+                                                        })
+                                                        .inner
+                                                        .on_hover_and_drag_cursor(
+                                                            CursorIcon::ResizeHorizontal,
+                                                        )
+                                                        .changed();
+                                                },
+                                            );
+                                        });
+                                    });
+
+                                ui.add_space(SPACE_MD);
+                                Frame::new()
+                                    .fill(palette.surface)
+                                    .corner_radius(RADIUS_MD)
+                                    .inner_margin(Margin::symmetric(16, 14))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new("Message spacing").strong(),
+                                                );
+                                                ui.label(
+                                                    RichText::new("Choose a cozy or dense timeline")
+                                                        .size(11.0)
+                                                        .color(palette.muted),
+                                                );
+                                            });
+                                            ui.with_layout(
+                                                Layout::right_to_left(Align::Center),
+                                                |ui| {
+                                                    let compact_selected = self.settings.density
+                                                        == MessageDensity::Compact;
+                                                    let cozy_selected = self.settings.density
+                                                        == MessageDensity::Cozy;
+                                                    *settings_changed |= ui
+                                                        .selectable_value(
+                                                            &mut self.settings.density,
+                                                            MessageDensity::Compact,
+                                                            RichText::new(
+                                                                MessageDensity::Compact.label(),
+                                                            )
+                                                            .color(if compact_selected {
+                                                                Color32::WHITE
+                                                            } else {
+                                                                palette.text
+                                                            }),
+                                                        )
+                                                        .pointer_cursor()
+                                                        .changed();
+                                                    *settings_changed |= ui
+                                                        .selectable_value(
+                                                            &mut self.settings.density,
+                                                            MessageDensity::Cozy,
+                                                            RichText::new(
+                                                                MessageDensity::Cozy.label(),
+                                                            )
+                                                            .color(if cozy_selected {
+                                                                Color32::WHITE
+                                                            } else {
+                                                                palette.text
+                                                            }),
+                                                        )
+                                                        .pointer_cursor()
+                                                        .changed();
+                                                },
+                                            );
+                                        });
+                                    });
+                            }
+                            SettingsSection::Chat => {
+                                settings_heading(
+                                    ui,
+                                    "Chat",
+                                    "Control how messages are composed and displayed",
+                                );
+                                *settings_changed |= settings_toggle(
+                                    ui,
+                                    &mut self.settings.enter_to_send,
+                                    "Enter to send",
+                                    "Use Shift+Enter to start a new line",
+                                );
+                                ui.add_space(SPACE_SM);
+                                *settings_changed |= settings_toggle(
+                                    ui,
+                                    &mut self.settings.show_channel_intro,
+                                    "Channel introductions",
+                                    "Show a short heading at the start of each channel",
+                                );
+                                ui.add_space(SPACE_SM);
+                                *settings_changed |= settings_toggle(
+                                    ui,
+                                    &mut self.settings.show_message_ids,
+                                    "Message IDs",
+                                    "Show signed author sequence IDs beside timestamps",
+                                );
+                                ui.add_space(SPACE_SM);
+                                *settings_changed |= settings_toggle(
+                                    ui,
+                                    &mut self.settings.show_member_list,
+                                    "Member list",
+                                    "Keep the member panel visible when the window is wide",
+                                );
+                            }
+                            SettingsSection::Connection => {
+                                settings_heading(
+                                    ui,
+                                    "Connection",
+                                    "Current peer-to-peer transport status",
+                                );
+                                Frame::new()
+                                    .fill(palette.surface)
+                                    .corner_radius(RADIUS_LG)
+                                    .inner_margin(Margin::symmetric(18, 18))
+                                    .show(ui, |ui| {
+                                        status_badge(
+                                            ui,
+                                            "Listening for peers",
+                                            GREEN,
+                                            palette.surface_hover,
+                                        );
+                                        ui.add_space(SPACE_LG);
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} peer{} online",
+                                                self.network.online_peers.len(),
+                                                if self.network.online_peers.len() == 1 {
+                                                    ""
+                                                } else {
+                                                    "s"
+                                                }
+                                            ))
+                                            .size(20.0)
+                                            .strong(),
+                                        );
+                                        if let Some(address) = self.network.listen_address {
+                                            ui.label(
+                                                RichText::new(format!("UDP {address}"))
+                                                    .monospace()
+                                                    .color(palette.muted),
+                                            );
+                                        }
+                                        ui.add_space(SPACE_XL);
+                                        ui.separator();
+                                        ui.add_space(SPACE_LG);
+                                        ui.label(
+                                            RichText::new("Transport and identity")
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(
+                                                "QUIC • Ed25519 • XChaCha20-Poly1305 • local SQLite history",
+                                            )
+                                            .size(11.0)
+                                            .color(palette.muted),
+                                        );
+                                    });
+                            }
+                        });
+                },
+            );
+        });
+    }
+
     fn render_modal(&mut self, ctx: &egui::Context) {
         let Some(mut modal) = self.modal.take() else {
             return;
@@ -867,6 +1424,14 @@ impl OpencordApp {
         let mut settings_changed = false;
         let mut save_profile = false;
         let palette = theme_palette(self.settings.theme);
+        let uses_action_footer = matches!(
+            &modal,
+            Modal::CreateGroup { .. }
+                | Modal::JoinGroup { .. }
+                | Modal::Invite { .. }
+                | Modal::Connect { .. }
+                | Modal::CreateChannel { .. }
+        );
         let title = match &modal {
             Modal::CreateGroup { .. } => "Create a group",
             Modal::JoinGroup { .. } => "Join an encrypted group",
@@ -877,26 +1442,32 @@ impl OpencordApp {
             Modal::Settings => "Settings",
             Modal::About => "About Opencord",
         };
-        egui::Window::new(title)
+        let mut window = egui::Window::new(title)
             .id(Id::new("opencord_modal"))
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .collapsible(false)
-            .resizable(matches!(modal, Modal::Settings))
+            .resizable(false)
             .frame(
                 Frame::window(&ctx.global_style())
                     .fill(palette.sidebar)
-                    .corner_radius(14)
-                    .inner_margin(24),
-            )
-            .show(ctx, |ui| {
-                ui.set_min_width(if matches!(modal, Modal::Settings) { 560.0 } else { 430.0 });
+                    .corner_radius(RADIUS_LG)
+                    .inner_margin(20),
+            );
+        if matches!(modal, Modal::Settings) {
+            window = window.fixed_size(Vec2::new(780.0, 520.0));
+        }
+        window.show(ctx, |ui| {
+                ui.set_min_width(if matches!(modal, Modal::Settings) { 740.0 } else { 440.0 });
                 match &mut modal {
                     Modal::CreateGroup { name } => {
                         ui.label(RichText::new("Start a private peer-to-peer space.").color(palette.muted));
                         ui.add_space(12.0);
                         ui.text_edit_singleline(name).request_focus();
-                        ui.add_space(12.0);
-                        if primary_button(ui, "Create group").clicked() {
+                        let (create, cancel) = modal_actions(ui, "Create group");
+                        if cancel {
+                            keep = false;
+                        }
+                        if create {
                             match self.node.create_group(name) {
                                 Ok(_) => { self.notice("Encrypted group created"); self.refresh(); keep = false; }
                                 Err(error) => self.error(error),
@@ -907,7 +1478,11 @@ impl OpencordApp {
                         ui.label(RichText::new("Paste an opencord:// invite from someone you trust.").color(palette.muted));
                         ui.add_space(10.0);
                         ui.add_sized([430.0, 120.0], egui::TextEdit::multiline(invite).hint_text("opencord://join/…"));
-                        if primary_button(ui, "Verify and join").clicked() {
+                        let (join, cancel) = modal_actions(ui, "Verify and join");
+                        if cancel {
+                            keep = false;
+                        }
+                        if join {
                             match self.node.import_invite(invite) {
                                 Ok(_) => { self.notice("Invite verified — rebuilding from online peers"); self.refresh(); keep = false; }
                                 Err(error) => self.error(error),
@@ -918,7 +1493,11 @@ impl OpencordApp {
                         ui.label(RichText::new("This invite grants access to encrypted group history. Share it privately.").color(palette.muted));
                         ui.add_space(10.0);
                         ui.add_sized([430.0, 140.0], egui::TextEdit::multiline(value).interactive(false));
-                        if primary_button(ui, "Copy encrypted invite").clicked() {
+                        let (copy, close) = modal_actions(ui, "Copy invite");
+                        if close {
+                            keep = false;
+                        }
+                        if copy {
                             ctx.copy_text(value.clone()); self.notice("Invite copied");
                         }
                     }
@@ -926,7 +1505,11 @@ impl OpencordApp {
                         ui.label(RichText::new("Enter a peer's reachable UDP address.").color(palette.muted));
                         ui.add_space(10.0);
                         ui.text_edit_singleline(address);
-                        if primary_button(ui, "Connect").clicked() {
+                        let (connect, cancel) = modal_actions(ui, "Connect");
+                        if cancel {
+                            keep = false;
+                        }
+                        if connect {
                             match address.parse::<SocketAddr>().map_err(anyhow::Error::from).and_then(|addr| self.node.connect(addr)) {
                                 Ok(()) => { self.notice("Connecting directly…"); keep = false; }
                                 Err(error) => self.error(error),
@@ -937,7 +1520,11 @@ impl OpencordApp {
                         ui.label(RichText::new("Channels sync with everyone in this group.").color(palette.muted));
                         ui.add_space(10.0);
                         ui.text_edit_singleline(name);
-                        if primary_button(ui, "Create channel").clicked() && let Some(group) = self.selected_group {
+                        let (create, cancel) = modal_actions(ui, "Create channel");
+                        if cancel {
+                            keep = false;
+                        }
+                        if create && let Some(group) = self.selected_group {
                             match self.node.create_channel(group, name) {
                                 Ok(channel) => { self.selected_channel = Some(channel.id); self.refresh(); keep = false; }
                                 Err(error) => self.error(error),
@@ -968,6 +1555,7 @@ impl OpencordApp {
                                         egui::Button::new(format!("#  {}", channel.name))
                                             .selected(self.selected_channel == Some(channel.id)),
                                     )
+                                    .pointer_cursor()
                                     .clicked()
                                 {
                                     selected = Some(channel.id);
@@ -986,102 +1574,12 @@ impl OpencordApp {
                         }
                     }
                     Modal::Settings => {
-                        ScrollArea::vertical().max_height(590.0).show(ui, |ui| {
-                            settings_heading(ui, "Profile", "How you appear to peers");
-                            ui.horizontal(|ui| {
-                                avatar(ui, &self.profile_name_draft, true, 42.0);
-                                ui.add_sized(
-                                    [280.0, 38.0],
-                                    egui::TextEdit::singleline(&mut self.profile_name_draft)
-                                        .hint_text("Display name"),
-                                );
-                                if ui.button("Save profile").clicked() {
-                                    save_profile = true;
-                                }
-                            });
-
-                            settings_divider(ui);
-                            settings_heading(ui, "Appearance", "Theme, accent, and interface scale");
-                            ui.label(RichText::new("THEME").size(10.0).strong().color(palette.muted));
-                            ui.horizontal_wrapped(|ui| {
-                                for theme in ThemeChoice::ALL {
-                                    let swatch = theme_palette(theme);
-                                    let selected = self.settings.theme == theme;
-                                    let response = Frame::new()
-                                        .fill(swatch.canvas)
-                                        .stroke(Stroke::new(
-                                            if selected { 2.0 } else { 1.0 },
-                                            if selected { accent_color(self.settings.accent) } else { swatch.border },
-                                        ))
-                                        .corner_radius(9)
-                                        .inner_margin(Margin::symmetric(14, 10))
-                                        .show(ui, |ui| {
-                                            ui.set_min_width(92.0);
-                                            ui.label(RichText::new(theme.label()).color(swatch.text).strong());
-                                        })
-                                        .response
-                                        .interact(Sense::click());
-                                    if response.clicked() && self.settings.theme != theme {
-                                        self.settings.theme = theme;
-                                        settings_changed = true;
-                                    }
-                                }
-                            });
-                            ui.add_space(12.0);
-                            ui.label(RichText::new("ACCENT").size(10.0).strong().color(palette.muted));
-                            ui.horizontal(|ui| {
-                                for accent in AccentChoice::ALL {
-                                    let selected = self.settings.accent == accent;
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                RichText::new(accent.label()).color(Color32::WHITE),
-                                            )
-                                            .fill(accent_color(accent))
-                                            .stroke(Stroke::new(
-                                                if selected { 2.0 } else { 0.0 },
-                                                Color32::WHITE,
-                                            )),
-                                        )
-                                        .clicked()
-                                        && !selected
-                                    {
-                                        self.settings.accent = accent;
-                                        settings_changed = true;
-                                    }
-                                }
-                            });
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Interface scale");
-                                settings_changed |= ui
-                                    .add(egui::Slider::new(&mut self.settings.ui_scale, 0.85..=1.20).step_by(0.05))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Message spacing");
-                                settings_changed |= ui
-                                    .selectable_value(&mut self.settings.density, MessageDensity::Cozy, MessageDensity::Cozy.label())
-                                    .changed();
-                                settings_changed |= ui
-                                    .selectable_value(&mut self.settings.density, MessageDensity::Compact, MessageDensity::Compact.label())
-                                    .changed();
-                            });
-
-                            settings_divider(ui);
-                            settings_heading(ui, "Chat", "Reading and composing messages");
-                            settings_changed |= ui.checkbox(&mut self.settings.enter_to_send, "Enter sends a message").changed();
-                            settings_changed |= ui.checkbox(&mut self.settings.show_channel_intro, "Show channel introductions").changed();
-                            settings_changed |= ui.checkbox(&mut self.settings.show_message_ids, "Show message IDs").changed();
-                            settings_changed |= ui.checkbox(&mut self.settings.show_member_list, "Show member list on wide windows").changed();
-                            settings_divider(ui);
-                            settings_heading(ui, "Connection", "Peer-to-peer transport status");
-                            ui.label(format!("{} peer(s) online", self.network.online_peers.len()));
-                            if let Some(address) = self.network.listen_address {
-                                ui.label(RichText::new(format!("Listening on {address}")).monospace().color(palette.muted));
-                            }
-                            ui.label(RichText::new("QUIC transport • Ed25519 identities • End-to-end encrypted groups").color(palette.muted));
-                        });
+                        self.render_settings_content(
+                            ui,
+                            palette,
+                            &mut settings_changed,
+                            &mut save_profile,
+                        );
                     }
                     Modal::About => {
                         ui.label(
@@ -1099,8 +1597,10 @@ impl OpencordApp {
                                 .strong()
                                 .color(palette.text),
                         );
-                        ui.hyperlink_to("github.com/CodyKoInABox", "https://github.com/CodyKoInABox");
-                        ui.hyperlink_to("Opencord on GitHub", "https://github.com/CodyKoInABox/opencord");
+                        ui.hyperlink_to("github.com/CodyKoInABox", "https://github.com/CodyKoInABox")
+                            .pointer_cursor();
+                        ui.hyperlink_to("Opencord on GitHub", "https://github.com/CodyKoInABox/opencord")
+                            .pointer_cursor();
                         ui.add_space(14.0);
                         ui.label(
                             RichText::new("AGPL-3.0-or-later")
@@ -1108,13 +1608,22 @@ impl OpencordApp {
                                 .color(palette.text),
                         );
                         ui.label(RichText::new("Free software licensed under the GNU Affero General Public License.").color(palette.muted));
-                        ui.hyperlink_to("Read the license", "https://www.gnu.org/licenses/agpl-3.0.html");
+                        ui.hyperlink_to("Read the license", "https://www.gnu.org/licenses/agpl-3.0.html")
+                            .pointer_cursor();
                         ui.add_space(14.0);
                         ui.label(RichText::new("XChaCha20-Poly1305 • Ed25519 • QUIC • SQLite WAL • Opus").size(11.0).color(palette.muted));
                     }
                 }
-                ui.add_space(10.0);
-                if ui.button("Close").clicked() { keep = false; }
+                if !uses_action_footer {
+                    ui.add_space(SPACE_MD);
+                    ui.separator();
+                    ui.add_space(SPACE_SM);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if secondary_button(ui, "Close").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
             });
         if save_profile {
             match self.node.rename_profile(&self.profile_name_draft) {
@@ -1145,17 +1654,16 @@ impl OpencordApp {
         egui::Area::new(Id::new("toast"))
             .anchor(Align2::RIGHT_TOP, [-22.0, 74.0])
             .show(ctx, |ui| {
-                let text = ui.visuals().text_color();
                 Frame::new()
                     .fill(if *error {
                         Color32::from_rgb(83, 35, 44)
                     } else {
                         Color32::from_rgb(32, 70, 58)
                     })
-                    .corner_radius(8)
-                    .inner_margin(Margin::symmetric(14, 10))
+                    .corner_radius(RADIUS_MD)
+                    .inner_margin(Margin::symmetric(16, 12))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(message).color(text).strong());
+                        ui.label(RichText::new(message).color(Color32::WHITE).strong());
                     });
             });
         ctx.request_repaint_after(Duration::from_millis(250));
@@ -1329,23 +1837,41 @@ fn configure_style(ctx: &egui::Context, settings: &AppSettings) {
     style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text);
     style.visuals.widgets.active.bg_fill = accent;
     style.visuals.widgets.active.weak_bg_fill = accent;
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, palette.text);
     style.visuals.widgets.open.bg_fill = palette.surface_hover;
     style.visuals.widgets.open.weak_bg_fill = palette.surface_hover;
     style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, palette.text);
     style.visuals.selection.bg_fill = accent;
     style.visuals.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
-    style.visuals.window_corner_radius = CornerRadius::same(12);
+    style.visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
+    style.visuals.menu_corner_radius = CornerRadius::same(RADIUS_MD);
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, FontId::proportional(24.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Small, FontId::proportional(11.0));
     style.spacing.item_spacing = match settings.density {
-        MessageDensity::Compact => Vec2::new(7.0, 4.0),
-        MessageDensity::Cozy => Vec2::new(8.0, 7.0),
+        MessageDensity::Compact => Vec2::new(SPACE_SM, SPACE_XS),
+        MessageDensity::Cozy => Vec2::new(SPACE_SM, SPACE_SM),
     };
-    style.spacing.button_padding = Vec2::new(10.0, 7.0);
+    style.spacing.button_padding = Vec2::new(SPACE_MD, 7.0);
+    style.spacing.interact_size = Vec2::new(36.0, 32.0);
+    style.spacing.window_margin = Margin::same(SPACE_LG as i8);
+    style.spacing.menu_margin = Margin::same(SPACE_SM as i8);
+    style.spacing.scroll = egui::style::ScrollStyle::thin();
     ctx.set_global_style(style);
 }
 
 fn brand_mark(ui: &mut egui::Ui) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(50.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::click());
+    let response = response.pointer_cursor();
     let accent = ui.visuals().selection.bg_fill;
     ui.painter().rect_filled(
         rect,
@@ -1367,7 +1893,8 @@ fn brand_mark(ui: &mut egui::Ui) -> egui::Response {
 }
 
 fn server_button(ui: &mut egui::Ui, group: &Group, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(50.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::click());
+    let response = response.pointer_cursor();
     let rounding = if selected || response.hovered() {
         15.0
     } else {
@@ -1409,7 +1936,8 @@ fn round_icon_button(
     color: Color32,
     tooltip: &str,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(50.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::click());
+    let response = response.pointer_cursor();
     ui.painter().rect_filled(
         rect,
         if response.hovered() { 15.0 } else { 25.0 },
@@ -1441,10 +1969,10 @@ fn user_panel(ui: &mut egui::Ui, node: &Node, modal: &mut Option<Modal>) {
     let display_name = node.identity().display_name();
     Frame::new()
         .fill(ui.visuals().extreme_bg_color)
-        .inner_margin(10)
+        .inner_margin(Margin::symmetric(SPACE_MD as i8, SPACE_SM as i8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                avatar(ui, &display_name, true, 34.0);
+                avatar(ui, &display_name, true, 36.0);
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(&display_name)
@@ -1459,15 +1987,13 @@ fn user_panel(ui: &mut egui::Ui, node: &Node, modal: &mut Option<Modal>) {
                     );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .small_button("⚙")
+                    if quiet_button(ui, "⚙")
                         .on_hover_text("Settings (Ctrl+,)")
                         .clicked()
                     {
                         *modal = Some(Modal::Settings);
                     }
-                    if ui
-                        .small_button("i")
+                    if quiet_button(ui, "i")
                         .on_hover_text("About Opencord")
                         .clicked()
                     {
@@ -1526,27 +2052,26 @@ fn channel_intro(ui: &mut egui::Ui, channel: Option<&Channel>, compact: bool) {
         .map(|channel| channel.name.as_str())
         .unwrap_or("welcome");
     if !compact {
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(64.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
         ui.painter()
-            .circle_filled(rect.center(), 32.0, ui.visuals().widgets.inactive.bg_fill);
+            .rect_filled(rect, RADIUS_LG, ui.visuals().widgets.inactive.bg_fill);
         ui.painter().text(
             rect.center(),
             Align2::CENTER_CENTER,
             "#",
-            FontId::proportional(34.0),
+            FontId::proportional(26.0),
             ui.visuals().text_color(),
         );
-        ui.add_space(8.0);
+        ui.add_space(SPACE_MD);
     }
     ui.label(
-        RichText::new(format!("Welcome to #{name}!"))
-            .size(if compact { 23.0 } else { 28.0 })
+        RichText::new(format!("Welcome to #{name}"))
+            .size(if compact { 21.0 } else { 25.0 })
             .strong()
             .color(ui.visuals().text_color()),
     );
     ui.label(
-        RichText::new("This is the beginning of this encrypted channel's replicated history.")
-            .color(ui.visuals().weak_text_color()),
+        RichText::new("This is the start of this channel.").color(ui.visuals().weak_text_color()),
     );
 }
 
@@ -1555,103 +2080,134 @@ fn message_row(
     entry: &TimelineEntry,
     show_message_id: bool,
     density: MessageDensity,
+    grouped: bool,
 ) -> Option<MessageAction> {
     let mut action = None;
     let compact = density == MessageDensity::Compact;
+    let predicted_height = match &entry.payload {
+        MessagePayload::Attachment { .. } => 132.0,
+        _ if grouped || compact => 32.0,
+        _ => 56.0,
+    };
+    let hover_rect = Rect::from_min_size(
+        ui.next_widget_position(),
+        Vec2::new(ui.available_width(), predicted_height),
+    );
+    let hovered = ui.rect_contains_pointer(hover_rect);
     Frame::new()
-        .inner_margin(Margin::symmetric(4, if compact { 3 } else { 7 }))
+        .inner_margin(Margin::symmetric(
+            SPACE_SM as i8,
+            if grouped || compact { 3 } else { 8 },
+        ))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                avatar(
-                    ui,
-                    &entry.author_name,
-                    true,
-                    if compact { 32.0 } else { 40.0 },
-                );
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&entry.author_name)
-                                .strong()
-                                .color(ui.visuals().text_color()),
-                        );
-                        ui.label(
-                            RichText::new(relative_time(entry.event.header.sent_at_ms))
-                                .size(10.0)
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                        if show_message_id {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}:{}",
-                                    entry.event.header.author.short(),
-                                    entry.event.header.author_sequence
-                                ))
-                                .monospace()
-                                .size(9.0)
-                                .color(ui.visuals().weak_text_color()),
-                            );
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.menu_button("•••", |ui| {
-                                if ui.button("Copy text").clicked() {
-                                    ui.ctx().copy_text(message_copy_text(entry));
-                                    ui.close();
-                                }
-                                if ui.button("Reply").clicked() {
-                                    action = Some(MessageAction::Reply(message_quote(entry)));
-                                    ui.close();
-                                }
-                            });
-                        });
-                    });
-                    match &entry.payload {
-                        MessagePayload::Text { body } | MessagePayload::System { body } => {
-                            ui.label(
-                                RichText::new(body)
-                                    .size(15.0)
-                                    .color(ui.visuals().text_color()),
-                            );
-                        }
-                        MessagePayload::Attachment {
-                            file_name,
-                            mime,
-                            bytes,
-                            caption,
-                        } => {
-                            Frame::new()
-                                .fill(ui.visuals().widgets.inactive.bg_fill)
-                                .corner_radius(8)
-                                .inner_margin(12)
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new("Encrypted attachment")
-                                            .size(10.0)
-                                            .color(ui.visuals().selection.bg_fill),
-                                    );
-                                    ui.label(RichText::new(file_name).strong());
+                if grouped {
+                    ui.add_space(if compact { 40.0 } else { 48.0 });
+                } else {
+                    avatar(
+                        ui,
+                        &entry.author_name,
+                        true,
+                        if compact { 34.0 } else { 40.0 },
+                    );
+                }
+                let content_width = (ui.available_width() - 116.0).max(100.0);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(content_width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        if !grouped {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(&entry.author_name)
+                                        .strong()
+                                        .color(ui.visuals().text_color()),
+                                );
+                                ui.label(
+                                    RichText::new(relative_time(entry.event.header.sent_at_ms))
+                                        .size(10.0)
+                                        .color(ui.visuals().weak_text_color()),
+                                );
+                                if show_message_id {
                                     ui.label(
                                         RichText::new(format!(
-                                            "{} • {}",
-                                            mime,
-                                            human_bytes(bytes.len())
+                                            "{}:{}",
+                                            entry.event.header.author.short(),
+                                            entry.event.header.author_sequence
                                         ))
-                                        .size(11.0)
+                                        .monospace()
+                                        .size(9.0)
                                         .color(ui.visuals().weak_text_color()),
                                     );
-                                    if !caption.is_empty() {
-                                        ui.label(RichText::new(caption));
-                                    }
-                                    if ui.button("Save a local copy").clicked() {
-                                        action = Some(MessageAction::SaveAttachment(
-                                            file_name.clone(),
-                                            bytes.clone(),
-                                        ));
-                                    }
-                                });
+                                }
+                            });
                         }
-                    }
-                });
+                        match &entry.payload {
+                            MessagePayload::Text { body } | MessagePayload::System { body } => {
+                                ui.label(
+                                    RichText::new(body)
+                                        .size(15.0)
+                                        .color(ui.visuals().text_color()),
+                                );
+                            }
+                            MessagePayload::Attachment {
+                                file_name,
+                                mime,
+                                bytes,
+                                caption,
+                            } => {
+                                Frame::new()
+                                    .fill(ui.visuals().widgets.inactive.bg_fill)
+                                    .corner_radius(RADIUS_MD)
+                                    .stroke(Stroke::new(
+                                        1.0,
+                                        ui.visuals().widgets.inactive.bg_stroke.color,
+                                    ))
+                                    .inner_margin(Margin::symmetric(14, 12))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new("Encrypted attachment")
+                                                .size(10.0)
+                                                .color(ui.visuals().selection.bg_fill),
+                                        );
+                                        ui.label(RichText::new(file_name).strong());
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} • {}",
+                                                mime,
+                                                human_bytes(bytes.len())
+                                            ))
+                                            .size(11.0)
+                                            .color(ui.visuals().weak_text_color()),
+                                        );
+                                        if !caption.is_empty() {
+                                            ui.label(RichText::new(caption));
+                                        }
+                                        if secondary_button(ui, "Save a local copy").clicked() {
+                                            action = Some(MessageAction::SaveAttachment(
+                                                file_name.clone(),
+                                                bytes.clone(),
+                                            ));
+                                        }
+                                    });
+                            }
+                        }
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    Vec2::new(108.0, 30.0),
+                    Layout::right_to_left(Align::Min),
+                    |ui| {
+                        if hovered {
+                            if message_action_button(ui, "Copy").clicked() {
+                                ui.ctx().copy_text(message_copy_text(entry));
+                            }
+                            if message_action_button(ui, "Reply").clicked() {
+                                action = Some(MessageAction::Reply(message_quote(entry)));
+                            }
+                        }
+                    },
+                );
             });
         });
     action
@@ -1742,7 +2298,7 @@ fn empty_state(ui: &mut egui::Ui, modal: &mut Option<Modal>) {
                 name: String::new(),
             });
         }
-        if ui.button("Join with an invite").clicked() {
+        if secondary_button(ui, "Join with an invite").clicked() {
             *modal = Some(Modal::JoinGroup {
                 invite: String::new(),
             });
@@ -1754,9 +2310,227 @@ fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
             .fill(ui.visuals().selection.bg_fill)
-            .corner_radius(7)
+            .corner_radius(RADIUS_SM)
             .min_size(Vec2::new(140.0, 38.0)),
     )
+    .pointer_cursor()
+}
+
+fn modal_actions(ui: &mut egui::Ui, primary_label: &str) -> (bool, bool) {
+    let mut primary = false;
+    let mut cancel = false;
+    ui.add_space(SPACE_LG);
+    ui.separator();
+    ui.add_space(SPACE_SM);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        primary = primary_button(ui, primary_label).clicked();
+        cancel = secondary_button(ui, "Cancel").clicked();
+    });
+    (primary, cancel)
+}
+
+fn secondary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let text = ui.visuals().text_color();
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(text))
+            .fill(ui.visuals().widgets.inactive.bg_fill)
+            .stroke(Stroke::new(
+                1.0,
+                ui.visuals().widgets.inactive.bg_stroke.color,
+            ))
+            .corner_radius(RADIUS_SM)
+            .min_size(Vec2::new(0.0, 36.0)),
+    )
+    .pointer_cursor()
+}
+
+fn quiet_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let text = ui.visuals().text_color();
+    ui.add(
+        egui::Button::new(RichText::new(label).strong().color(text))
+            .frame(false)
+            .corner_radius(RADIUS_SM)
+            .min_size(Vec2::new(32.0, 32.0)),
+    )
+    .pointer_cursor()
+}
+
+fn message_action_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let text = ui.visuals().text_color();
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 26.0;
+        ui.spacing_mut().button_padding = Vec2::new(8.0, 3.0);
+        ui.add_sized(
+            [50.0, 26.0],
+            egui::Button::new(RichText::new(label).size(10.0).color(text))
+                .fill(ui.visuals().widgets.inactive.bg_fill)
+                .corner_radius(RADIUS_SM),
+        )
+        .pointer_cursor()
+    })
+    .inner
+}
+
+fn channel_button(
+    ui: &mut egui::Ui,
+    name: &str,
+    selected: bool,
+    has_draft: bool,
+) -> egui::Response {
+    let size = Vec2::new(ui.available_width(), 36.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let response = response.pointer_cursor();
+    let accent = ui.visuals().selection.bg_fill;
+    let fill = if selected {
+        accent
+    } else if response.hovered() {
+        ui.visuals().widgets.hovered.weak_bg_fill
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, RADIUS_SM, fill);
+    if selected {
+        ui.painter().rect_filled(
+            Rect::from_min_max(
+                egui::pos2(rect.left(), rect.top() + 7.0),
+                egui::pos2(rect.left() + 3.0, rect.bottom() - 7.0),
+            ),
+            2.0,
+            Color32::WHITE,
+        );
+    }
+    let text_color = if selected {
+        Color32::WHITE
+    } else if response.hovered() {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 13.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        "#",
+        FontId::proportional(17.0),
+        text_color.gamma_multiply(0.8),
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 35.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        name,
+        FontId::proportional(14.0),
+        text_color,
+    );
+    if has_draft {
+        ui.painter().circle_filled(
+            egui::pos2(rect.right() - 13.0, rect.center().y),
+            3.0,
+            if selected { Color32::WHITE } else { accent },
+        );
+    }
+    response
+}
+
+fn section_label(ui: &mut egui::Ui, label: &str) {
+    ui.label(
+        RichText::new(label.to_uppercase())
+            .size(10.0)
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+}
+
+fn status_badge(ui: &mut egui::Ui, label: &str, dot: Color32, fill: Color32) {
+    Frame::new()
+        .fill(fill)
+        .corner_radius(RADIUS_SM)
+        .inner_margin(Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(7.0), Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.5, dot);
+                ui.label(
+                    RichText::new(label)
+                        .size(11.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            });
+        });
+}
+
+fn settings_nav_button(
+    ui: &mut egui::Ui,
+    section: SettingsSection,
+    selected: bool,
+) -> egui::Response {
+    let text = if selected {
+        Color32::WHITE
+    } else {
+        ui.visuals().text_color()
+    };
+    ui.add_sized(
+        [ui.available_width(), 38.0],
+        egui::Button::new(RichText::new(section.label()).strong().color(text))
+            .selected(selected)
+            .fill(if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                Color32::TRANSPARENT
+            })
+            .corner_radius(RADIUS_SM),
+    )
+    .pointer_cursor()
+}
+
+fn settings_toggle(ui: &mut egui::Ui, value: &mut bool, title: &str, description: &str) -> bool {
+    let enabled = *value;
+    let response = Frame::new()
+        .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+        .corner_radius(RADIUS_MD)
+        .inner_margin(Margin::symmetric(14, 12))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).strong());
+                    ui.label(
+                        RichText::new(description)
+                            .size(11.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 22.0), Sense::hover());
+                    let accent = ui.visuals().selection.bg_fill;
+                    ui.painter().rect_filled(
+                        rect,
+                        11.0,
+                        if enabled {
+                            accent
+                        } else {
+                            ui.visuals().widgets.hovered.bg_fill
+                        },
+                    );
+                    let knob_x = if enabled {
+                        rect.right() - 11.0
+                    } else {
+                        rect.left() + 11.0
+                    };
+                    ui.painter().circle_filled(
+                        egui::pos2(knob_x, rect.center().y),
+                        8.0,
+                        Color32::WHITE,
+                    );
+                });
+            });
+        })
+        .response
+        .interact(Sense::click())
+        .pointer_cursor();
+    if response.clicked() {
+        *value = !*value;
+        true
+    } else {
+        false
+    }
 }
 
 fn settings_heading(ui: &mut egui::Ui, title: &str, description: &str) {
@@ -1772,10 +2546,4 @@ fn settings_heading(ui: &mut egui::Ui, title: &str, description: &str) {
             .color(ui.visuals().weak_text_color()),
     );
     ui.add_space(10.0);
-}
-
-fn settings_divider(ui: &mut egui::Ui) {
-    ui.add_space(18.0);
-    ui.separator();
-    ui.add_space(18.0);
 }
