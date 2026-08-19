@@ -1,0 +1,54 @@
+[package]
+name = "opencord"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "A lightweight, local-first, peer-to-peer desktop chat prototype"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/CodyKoInABox/opencord"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+blake3 = "1.8"
+chacha20poly1305 = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+cpal = "0.18"
+directories = "6.0"
+ed25519-dalek = "3.0"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu"] }
+getrandom = "0.3"
+hmac = "0.12"
+if-addrs = "0.15"
+igd-next = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+mdns-sd = { version = "0.21", default-features = false }
+mime_guess = "2.0"
+opus = "0.3"
+parking_lot = "0.12"
+postcard = { version = "1.1", features = ["use-std"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "bloom"] }
+rcgen = "0.14"
+rfd = { version = "0.17", default-features = false }
+ringbuf = "0.5"
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2.6"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+xcap = { version = "0.9", default-features = false }
+zeroize = { version = "1.8", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"
+strip = "symbols"

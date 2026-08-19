@@ -1,0 +1,5 @@
+/target/
+/.opencord-dev/
+/artifacts/
+*.log
+*.pdb
